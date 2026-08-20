@@ -1,6 +1,6 @@
 {
   "name": "aether-panel",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "private": true,
   "description": "A standalone Windows Minecraft control panel with local server builders and compatible mod discovery.",
   "main": "dist/main/index.js",
