@@ -23,13 +23,13 @@ Aether Panel uses [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH
 | Release purpose | Version pattern | Tag example | Recommended GitHub release name | Update channel |
 |---|---:|---|---|---|
 | Normal stable release | `0.MINOR.PATCH` | `v0.1.1` | `Aether Panel 0.1.1` | Stable |
-| Feature release | Increase `MINOR` | `v0.2.0` | `Aether Panel 0.2 — Server Profiles` | Stable |
-| Bug or security fix | Increase `PATCH` | `v0.2.1` | `Aether Panel 0.2.1 — Stability Fixes` | Stable |
-| Preview build | `0.MINOR.PATCH-beta.N` | `v0.3.0-beta.1` | `Aether Panel 0.3 Preview 1` | Preview |
-| Follow-up preview | Increase `beta.N` | `v0.3.0-beta.2` | `Aether Panel 0.3 Preview 2` | Preview |
-| Recovery release | A new higher version | `v0.2.2` | `Aether Panel 0.2.2 — Recovery Release` | Channel affected |
+| Feature release | Increase `MINOR` | `v0.2.0` | `Aether Panel 0.2.0` | Stable |
+| Bug or security fix | Increase `PATCH` | `v0.2.1` | `Aether Panel 0.2.1` | Stable |
+| Preview build | `0.MINOR.PATCH-beta.N` | `v0.3.0-beta.1` | `Aether Panel 0.3.0 Preview 1` | Preview |
+| Follow-up preview | Increase `beta.N` | `v0.3.0-beta.2` | `Aether Panel 0.3.0 Preview 2` | Preview |
+| Recovery release | A new higher version | `v0.2.2` | `Aether Panel 0.2.2` | Channel affected |
 
-Use a short, user-facing subtitle only when it explains the release. For example, a feature release can be named **Aether Panel 0.2 — Server Profiles**, while a small maintenance release can simply be named **Aether Panel 0.2.1**.
+Keep the GitHub release title exact and predictable; the workflow generates it automatically. Put friendly context such as **Server Profiles**, **Stability Fixes**, or **Recovery Release** in the release-notes heading instead of changing the versioned title.
 
 > **Version safety rule:** Never reuse a published version number and never ask the updater to move a client to a lower version. If `0.2.1` is faulty, publish the known-good code as `0.2.2`. The updater can then move users forward safely.
 
@@ -62,7 +62,7 @@ For a preview release, use a semantic prerelease version such as `0.1.3-beta.1` 
 | Choose the next version | `0.2.0` for features; `0.2.1` for fixes | `0.3.0-beta.1` |
 | Update `package.json` | Set `version` to `0.2.0` | Set `version` to `0.3.0-beta.1` |
 | Commit | `git commit -am "release: 0.2.0"` | `git commit -am "release: 0.3.0-beta.1"` |
-| Create the annotated tag | `git tag -a v0.2.0 -m "Aether Panel 0.2.0"` | `git tag -a v0.3.0-beta.1 -m "Aether Panel 0.3 Preview 1"` |
+| Create the annotated tag | `git tag -a v0.2.0 -m "Aether Panel 0.2.0"` | `git tag -a v0.3.0-beta.1 -m "Aether Panel 0.3.0 Preview 1"` |
 | Publish | `git push origin main v0.2.0` | `git push origin main v0.3.0-beta.1` |
 | Verify | Confirm `latest.yml`, installer, and blockmap appear on the GitHub release | Confirm `beta.yml`, installer, and blockmap appear on the GitHub prerelease |
 
