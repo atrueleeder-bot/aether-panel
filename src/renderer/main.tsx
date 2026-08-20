@@ -40,7 +40,7 @@ import {
 import type { BuildEvent, ManagedServer, ModSearchHit, ReleasePolicy, ResourceSnapshot, RuntimeStatus, ServerOutputEvent, ServerType, UpdateChannel, UpdateState } from './aether';
 import './styles.css';
 
-type View = 'overview' | 'build' | 'discover' | 'console' | 'updates';
+type View = 'overview' | 'server' | 'build' | 'discover' | 'console' | 'updates';
 
 const serverTypeMeta: Record<ServerType, { label: string; accent: string; description: string; needsGit?: boolean; loader: string; contentType: 'mod' | 'plugin' }> = {
   paper: { label: 'Paper', accent: '#51d4ff', description: 'High-performance Java server with plugin ecosystem.', loader: 'bukkit', contentType: 'plugin' },
@@ -302,7 +302,7 @@ function App() {
       const server = await window.aether.buildServer(form);
       await refreshServers();
       setSelectedServerId(server.id);
-      setView('overview');
+      setView('server');
       pushNotice('success', `${server.name} is ready for its first start.`);
     } catch (error) {
       pushNotice('error', error instanceof Error ? error.message : 'The server build did not complete.');
@@ -311,12 +311,27 @@ function App() {
     }
   }
 
-  async function start(server: ManagedServer) {
+  function openServer(server: ManagedServer) {
+    setSelectedServerId(server.id);
+    setView('server');
+  }
+
+  function openConsole(server: ManagedServer) {
+    setSelectedServerId(server.id);
+    setView('console');
+  }
+
+  function openDiscovery(server: ManagedServer) {
+    setSelectedServerId(server.id);
+    setView('discover');
+  }
+
+  async function start(server: ManagedServer, showConsole = true) {
     try {
       await window.aether.startServer(server.id);
       await refreshServers();
       setSelectedServerId(server.id);
-      setView('console');
+      if (showConsole) setView('console');
     } catch (error) {
       pushNotice('error', error instanceof Error ? error.message : 'Unable to start this server.');
     }
@@ -336,6 +351,7 @@ function App() {
     try {
       await window.aether.deleteServer(server.id);
       setSelectedServerId(null);
+      setView('overview');
       await refreshServers();
       pushNotice('success', `${server.name} was removed from the panel. Its files were not deleted.`);
     } catch (error) {
@@ -427,7 +443,7 @@ function App() {
           <p className="nav-kicker">CONTROL ROOM</p>
           {navigation.map((item) => {
             const Icon = item.icon;
-            return <button key={item.id} className={`nav-button ${view === item.id ? 'active' : ''}`} onClick={() => { setView(item.id); setSidebarOpen(false); }}>
+            return <button key={item.id} className={`nav-button ${view === item.id || (item.id === 'overview' && view === 'server') ? 'active' : ''}`} onClick={() => { setView(item.id); setSidebarOpen(false); }}>
               <Icon size={18} /><span>{item.label}</span>{item.id === 'console' && onlineServers > 0 && <i>{onlineServers}</i>}
             </button>;
           })}
@@ -440,7 +456,7 @@ function App() {
       <main className="main-stage">
         <header className="topbar">
           <button className="mobile-menu icon-button" onClick={() => setSidebarOpen(true)} aria-label="Open navigation"><Menu size={20} /></button>
-          <div className="breadcrumb"><span>Windows local</span><ChevronRight size={14}/><strong>{view === 'overview' ? 'Mission control' : view === 'build' ? 'Server foundry' : view === 'discover' ? 'Compatible discovery' : view === 'console' ? 'Live console' : 'Updates & rollback'}</strong></div>
+          <div className="breadcrumb"><span>Windows local</span><ChevronRight size={14}/><strong>{view === 'overview' ? 'Mission control' : view === 'server' ? selectedServer?.name ?? 'Server details' : view === 'build' ? 'Server foundry' : view === 'discover' ? 'Compatible discovery' : view === 'console' ? 'Live console' : 'Updates & rollback'}</strong></div>
           <div className="top-actions">
             <div className="local-badge"><ShieldCheck size={15}/><span>Private by design</span></div>
             <button className="primary-button compact" onClick={() => setView('build')}><Plus size={17}/> New server</button>
@@ -471,7 +487,7 @@ function App() {
             <div><p className="eyebrow"><span></span> FLEET</p><h2>Managed worlds</h2></div>
             <button className="text-button" onClick={() => setView('build')}>Create a server <ArrowUpRight size={16}/></button>
           </div>
-          {servers.length ? <div className="server-list">{servers.map((server) => <ServerRow key={server.id} server={server} selected={selectedServer?.id === server.id} onSelect={() => setSelectedServerId(server.id)} onStart={() => start(server)} onStop={() => stop(server)} onRemove={() => removeServer(server)} />)}</div> : <EmptyFleet onBuild={() => setView('build')} />}
+          {servers.length ? <div className="server-list">{servers.map((server) => <ServerRow key={server.id} server={server} selected={selectedServer?.id === server.id} onSelect={() => openServer(server)} onConsole={() => openConsole(server)} onStart={() => start(server)} onStop={() => stop(server)} onRemove={() => removeServer(server)} />)}</div> : <EmptyFleet onBuild={() => setView('build')} />}
 
           <ResourceMonitor history={resourceHistory} />
 
@@ -522,6 +538,25 @@ function App() {
               <div className="source-list"><p>Verified build routes</p><span><Check size={14}/> Mojang / Paper / Fabric Meta</span><span><Check size={14}/> Forge Maven installer</span><span><Check size={14}/> Spigot BuildTools</span></div>
             </aside>
           </div>
+        </section>}
+
+        {view === 'server' && <section className="content-area server-detail-view">
+          {selectedServer ? <>
+            <div className="detail-back-row"><button className="text-button" onClick={() => setView('overview')}><ChevronRight className="back-chevron" size={16}/> Back to Mission control</button></div>
+            <div className="server-detail-hero">
+              <div><p className="eyebrow"><span></span> MANAGED WORLD</p><h1>{selectedServer.name}</h1><p>{serverTypeMeta[selectedServer.type].label} {selectedServer.version} · local port {selectedServer.port} · created {relativeTime(selectedServer.createdAt)}</p></div>
+              <div className="server-detail-actions"><span className={`status-label ${selectedServer.status}`}><i></i>{selectedServer.status}</span>{selectedServer.status === 'online' ? <button className="danger-button" onClick={() => stop(selectedServer)}><Square size={16}/> Stop world</button> : <button className="primary-button" onClick={() => start(selectedServer, false)}><Play size={16}/> Start world</button>}</div>
+            </div>
+            <div className="server-detail-grid">
+              <div className="server-profile-card glass-card">
+                <div className="card-topline"><div><p className="eyebrow"><span></span> SERVER PROFILE</p><h3>Local deployment details</h3></div><Server size={20}/></div>
+                <div className="server-profile-stats"><div><span>RUNTIME</span><strong>{serverTypeMeta[selectedServer.type].label}</strong><small>{serverTypeMeta[selectedServer.type].description}</small></div><div><span>MINECRAFT</span><strong>{selectedServer.version}</strong><small>Managed local runtime</small></div><div><span>MEMORY</span><strong>{selectedServer.memory / 1024 >= 1 ? `${selectedServer.memory / 1024} GB` : `${selectedServer.memory} MB`}</strong><small>Configured ceiling</small></div><div><span>PORT</span><strong>{selectedServer.port}</strong><small>localhost:{selectedServer.port}</small></div></div>
+                <div className="server-workspace"><FolderOpen size={17}/><div><span>WORKSPACE</span><strong>{selectedServer.directory}</strong></div></div>
+              </div>
+              <aside className="server-command-card glass-card"><p className="eyebrow"><span></span> COMMAND DECK</p><h3>Operate this world.</h3><p>Move from configuration to console and compatible content without losing the selected server.</p><button className="primary-button full-width" onClick={() => openConsole(selectedServer)}><TerminalSquare size={17}/> Open live console</button><button className="ghost-button full-width" onClick={() => openDiscovery(selectedServer)}><Sparkles size={17}/> Find compatible content</button><button className="remove-server-button" onClick={() => removeServer(selectedServer)}><Trash2 size={15}/> Remove from panel</button></aside>
+            </div>
+            <ServerInventory server={selectedServer} />
+          </> : <div className="discovery-empty glass-card"><div className="empty-orb"><Server size={26}/></div><h3>Select a managed world</h3><p>Return to Mission Control and choose a world to inspect its local profile, content inventory, and command deck.</p><button className="primary-button" onClick={() => setView('overview')}><Activity size={18}/> Open Mission control</button></div>}
         </section>}
 
         {view === 'discover' && <section className="content-area discover-view">
@@ -594,13 +629,15 @@ function EmptyFleet({ onBuild }: { onBuild: () => void }) {
   return <div className="empty-fleet glass-card"><div className="empty-orb"><Gamepad2 size={28}/></div><div><h3>Your first world belongs here.</h3><p>Choose a popular runtime, set its local destination, and Aether will make the build path visible from download to launch.</p></div><button className="primary-button" onClick={onBuild}><Plus size={17}/> Forge first server</button></div>;
 }
 
-function ServerRow({ server, selected, onSelect, onStart, onStop, onRemove }: { server: ManagedServer; selected: boolean; onSelect: () => void; onStart: () => void; onStop: () => void; onRemove: () => void }) {
+function ServerRow({ server, selected, onSelect, onConsole, onStart, onStop, onRemove }: { server: ManagedServer; selected: boolean; onSelect: () => void; onConsole: () => void; onStart: () => void; onStop: () => void; onRemove: () => void }) {
   const meta = serverTypeMeta[server.type];
   const installedContent = server.installedContent ?? [];
-  return <>
-    <div className={`server-row glass-card ${selected ? 'selected' : ''}`} onClick={onSelect}><div className="server-type" style={{ '--type-accent': meta.accent } as React.CSSProperties}><span></span><strong>{meta.label}</strong></div><div className="server-name"><h3>{server.name}</h3><p>{server.version} · local port {server.port} · created {relativeTime(server.createdAt)}</p></div><div className="server-resource"><Cpu size={15}/><span>{server.memory / 1024 >= 1 ? `${server.memory / 1024} GB` : `${server.memory} MB`}</span></div><div className="server-resource"><PackagePlus size={15}/><span>{installedContent.length} content</span></div><div className={`status-label ${server.status}`}><i></i>{server.status}</div><div className="row-actions"><button className="row-icon" title="Show installed content" onClick={(event) => { event.stopPropagation(); onSelect(); }}><PackagePlus size={17}/></button><button className="row-icon" title="Open live console" onClick={(event) => { event.stopPropagation(); onSelect(); }}><TerminalSquare size={17}/></button>{server.status === 'online' ? <button className="row-icon stop" title="Stop server" onClick={(event) => { event.stopPropagation(); onStop(); }}><Square size={16}/></button> : <button className="row-icon play" title="Start server" onClick={(event) => { event.stopPropagation(); onStart(); }}><Play size={16}/></button>}<button className="row-icon delete" title="Remove server from panel" onClick={(event) => { event.stopPropagation(); onRemove(); }}><Trash2 size={16}/></button><button className="row-icon more" title="More options"><MoreHorizontal size={18}/></button></div></div>
-    {selected && <div className="server-inventory glass-card"><div className="inventory-heading"><div><p className="eyebrow"><span></span> INSTALLED CONTENT</p><h3>{installedContent.length ? `${installedContent.length} installed ${installedContent.length === 1 ? 'item' : 'items'}` : 'No installed content yet'}</h3></div><span className="inventory-path">{server.type === 'paper' || server.type === 'spigot' ? 'plugins' : 'mods'}</span></div>{installedContent.length ? <div className="inventory-grid">{installedContent.map((item) => <div className="inventory-item" key={`${item.projectId}-${item.filename}`}><div className="inventory-icon"><PackagePlus size={15}/></div><div><strong>{item.title}</strong><p>{item.filename} · installed {relativeTime(item.installedAt)}</p></div><span>{item.kind}</span></div>)}</div> : <p className="inventory-empty">Install compatible content from Discovery and it will be acknowledged here immediately.</p>}</div>}
-  </>;
+  return <div className={`server-row glass-card ${selected ? 'selected' : ''}`} onClick={onSelect}><div className="server-type" style={{ '--type-accent': meta.accent } as React.CSSProperties}><span></span><strong>{meta.label}</strong></div><div className="server-name"><h3>{server.name}</h3><p>{server.version} · local port {server.port} · created {relativeTime(server.createdAt)}</p></div><div className="server-resource"><Cpu size={15}/><span>{server.memory / 1024 >= 1 ? `${server.memory / 1024} GB` : `${server.memory} MB`}</span></div><div className="server-resource"><PackagePlus size={15}/><span>{installedContent.length} content</span></div><div className={`status-label ${server.status}`}><i></i>{server.status}</div><div className="row-actions"><button className="row-icon" title="Open server details" onClick={(event) => { event.stopPropagation(); onSelect(); }}><PackagePlus size={17}/></button><button className="row-icon" title="Open live console" onClick={(event) => { event.stopPropagation(); onConsole(); }}><TerminalSquare size={17}/></button>{server.status === 'online' ? <button className="row-icon stop" title="Stop server" onClick={(event) => { event.stopPropagation(); onStop(); }}><Square size={16}/></button> : <button className="row-icon play" title="Start server" onClick={(event) => { event.stopPropagation(); onStart(); }}><Play size={16}/></button>}<button className="row-icon delete" title="Remove server from panel" onClick={(event) => { event.stopPropagation(); onRemove(); }}><Trash2 size={16}/></button><button className="row-icon more" title="More options"><MoreHorizontal size={18}/></button></div></div>;
+}
+
+function ServerInventory({ server }: { server: ManagedServer }) {
+  const installedContent = server.installedContent ?? [];
+  return <div className="server-inventory glass-card"><div className="inventory-heading"><div><p className="eyebrow"><span></span> INSTALLED CONTENT</p><h3>{installedContent.length ? `${installedContent.length} installed ${installedContent.length === 1 ? 'item' : 'items'}` : 'No installed content yet'}</h3></div><span className="inventory-path">{server.type === 'paper' || server.type === 'spigot' ? 'plugins' : 'mods'}</span></div>{installedContent.length ? <div className="inventory-grid">{installedContent.map((item) => <div className="inventory-item" key={`${item.projectId}-${item.filename}`}><div className="inventory-icon"><PackagePlus size={15}/></div><div><strong>{item.title}</strong><p>{item.filename} · installed {relativeTime(item.installedAt)}</p></div><span>{item.kind}</span></div>)}</div> : <p className="inventory-empty">Install compatible content from Discovery and it will be acknowledged here immediately.</p>}</div>;
 }
 
 function ModCard({ mod, isInstalling, installed, onInstall, mode }: { mod: ModSearchHit; isInstalling: boolean; installed: boolean; onInstall: () => void; mode: 'mod' | 'plugin' }) {
