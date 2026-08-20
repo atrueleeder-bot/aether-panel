@@ -22,7 +22,8 @@ export interface UpdateState {
   progress?: number;
 }
 
-const DEFAULT_SETTINGS: UpdateSettings = { feedUrl: '', channel: 'stable' };
+const OFFICIAL_RELEASE_FEED = 'https://github.com/atrueleeder-bot/aether-panel';
+const DEFAULT_SETTINGS: UpdateSettings = { feedUrl: OFFICIAL_RELEASE_FEED, channel: 'stable' };
 let settings: UpdateSettings = { ...DEFAULT_SETTINGS };
 let state: UpdateState = {
   phase: 'unconfigured',
@@ -105,8 +106,9 @@ function configureUpdater() {
 export async function initializeUpdates() {
   try {
     const parsed = JSON.parse(await readFile(settingsFile(), 'utf8')) as Partial<UpdateSettings>;
+    const savedFeedUrl = typeof parsed.feedUrl === 'string' ? parsed.feedUrl.trim() : '';
     settings = {
-      feedUrl: typeof parsed.feedUrl === 'string' ? validateFeedUrl(parsed.feedUrl) : '',
+      feedUrl: savedFeedUrl ? validateFeedUrl(savedFeedUrl) : DEFAULT_SETTINGS.feedUrl,
       channel: parsed.channel === 'preview' ? 'preview' : 'stable',
     };
   } catch {
@@ -121,8 +123,9 @@ export function getUpdateState() {
 
 export async function saveUpdateSettings(payload: unknown) {
   const value = payload as Partial<UpdateSettings>;
+  const requestedFeedUrl = typeof value.feedUrl === 'string' ? value.feedUrl.trim() : settings.feedUrl;
   settings = {
-    feedUrl: validateFeedUrl(typeof value.feedUrl === 'string' ? value.feedUrl.trim() : settings.feedUrl),
+    feedUrl: requestedFeedUrl ? validateFeedUrl(requestedFeedUrl) : DEFAULT_SETTINGS.feedUrl,
     channel: value.channel === 'preview' ? 'preview' : 'stable',
   };
   await persistSettings();
