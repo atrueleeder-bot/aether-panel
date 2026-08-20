@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' https://cdn.modrinth.com data:; connect-src 'self' https://api.modrinth.com https://fill.papermc.io https://piston-meta.mojang.com https://meta.fabricmc.net https://maven.minecraftforge.net https://hub.spigotmc.org; object-src 'none'; base-uri 'self'; form-action 'self'" />
+    <meta name="theme-color" content="#07111f" />
+    <style>
+      :root { background: #07111f; }
+      body { margin: 0; background: #07111f; }
+      #startup-loading { position: fixed; inset: 0; z-index: 9999; display: grid; place-items: center; overflow: hidden; color: #dceeff; background: radial-gradient(circle at 50% 43%, rgba(43, 126, 185, .18), transparent 34%), #07111f; font-family: Inter, ui-sans-serif, system-ui, sans-serif; transition: opacity .42s ease, visibility .42s ease; }
+      #startup-loading::before { content: ''; position: absolute; inset: 0; opacity: .34; background-image: linear-gradient(rgba(113, 180, 230, .055) 1px, transparent 1px), linear-gradient(90deg, rgba(113, 180, 230, .055) 1px, transparent 1px); background-size: 42px 42px; mask-image: linear-gradient(to bottom, black, transparent 85%); }
+      #startup-loading.startup-done { opacity: 0; visibility: hidden; pointer-events: none; }
+      .startup-panel { position: relative; width: min(360px, calc(100vw - 42px)); padding: 32px 34px 28px; text-align: center; border: 1px solid rgba(154, 210, 255, .16); border-radius: 18px; background: linear-gradient(145deg, rgba(12, 36, 61, .9), rgba(6, 20, 37, .88)); box-shadow: 0 24px 70px rgba(0, 0, 0, .4), 0 0 60px rgba(53, 165, 232, .1); }
+      .startup-mark { width: 45px; height: 45px; display: grid; place-items: center; margin: 0 auto 16px; border: 1px solid rgba(151, 226, 255, .46); border-radius: 13px; color: #e7f8ff; background: linear-gradient(145deg, #42bdf5, #2a6fca); box-shadow: 0 0 28px rgba(72, 188, 255, .38); font-size: 23px; font-weight: 800; }
+      .startup-kicker { margin: 0 0 7px; color: #76cfff; font-family: 'DM Mono', monospace; font-size: 9px; letter-spacing: .2em; }
+      .startup-title { margin: 0; color: #f2f8ff; font-size: 21px; letter-spacing: -.04em; }
+      .startup-status { margin: 9px 0 22px; color: #839bb5; font-family: 'DM Mono', monospace; font-size: 10px; }
+      .startup-progress { height: 3px; overflow: hidden; border-radius: 99px; background: rgba(153, 201, 242, .1); }
+      .startup-progress span { display: block; width: 42%; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #54c9ff, #a9e8ff); box-shadow: 0 0 14px rgba(84, 201, 255, .75); animation: startup-sweep 1.25s ease-in-out infinite; }
+      @keyframes startup-sweep { 0% { transform: translateX(-120%); } 55%, 100% { transform: translateX(270%); } }
+    </style>
+    <title>Aether Panel</title>
+  </head>
+  <body>
+    <div id="startup-loading" aria-live="polite"><div class="startup-panel"><div class="startup-mark">A</div><p class="startup-kicker">LOCAL SERVER OS</p><h1 class="startup-title">Starting Aether</h1><p class="startup-status">Preparing your private control room…</p><div class="startup-progress"><span></span></div></div></div>
+    <div id="root"></div>
+    <script type="module" src="/src/renderer/main.tsx"></script>
+  </body>
+</html>
