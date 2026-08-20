@@ -40,7 +40,7 @@ jobs:
           }
 
       - name: Build managed NSIS release
-        run: pnpm dist:win
+        run: pnpm dist:win -- --config.generateUpdatesFilesForAllChannels=true
 
       - name: Create GitHub release and publish updater artifacts
         uses: softprops/action-gh-release@v2
