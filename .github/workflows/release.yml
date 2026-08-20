@@ -42,11 +42,26 @@ jobs:
       - name: Build managed NSIS release
         run: pnpm dist:win -- --config.generateUpdatesFilesForAllChannels=true
 
+      - name: Derive release metadata
+        id: release_meta
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $version = $tag.TrimStart('v')
+          if ($version -match '^(?<base>\d+\.\d+\.\d+)-beta\.(?<number>\d+)$') {
+            "release_name=Aether Panel $($Matches.base) Preview $($Matches.number)" >> $env:GITHUB_OUTPUT
+            "prerelease=true" >> $env:GITHUB_OUTPUT
+          } else {
+            "release_name=Aether Panel $version" >> $env:GITHUB_OUTPUT
+            "prerelease=false" >> $env:GITHUB_OUTPUT
+          }
+
       - name: Create GitHub release and publish updater artifacts
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          name: ${{ steps.release_meta.outputs.release_name }}
+          prerelease: ${{ steps.release_meta.outputs.prerelease }}
           files: |
             release/*.exe
             release/*.yml
