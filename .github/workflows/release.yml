@@ -42,6 +42,19 @@ jobs:
       - name: Build managed NSIS release
         run: pnpm dist:win -- --config.generateUpdatesFilesForAllChannels=true
 
+      - name: Ensure update manifests exist
+        shell: pwsh
+        run: |
+          if ((Test-Path 'release/latest.yml') -and -not (Test-Path 'release/beta.yml')) {
+            Copy-Item 'release/latest.yml' 'release/beta.yml'
+          }
+          if (-not (Test-Path 'release/latest.yml')) {
+            throw 'The Stable update manifest latest.yml was not generated.'
+          }
+          if (-not (Test-Path 'release/beta.yml')) {
+            throw 'The Preview update manifest beta.yml was not generated.'
+          }
+
       - name: Derive release metadata
         id: release_meta
         shell: pwsh
