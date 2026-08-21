@@ -87,8 +87,10 @@ export interface ModrinthPackVersion {
 
 const USER_AGENT = 'atrueleeder-bot/aether-panel (https://github.com/atrueleeder-bot/aether-panel)';
 const TRUSTED_DOWNLOAD_HOSTS = new Set(['cdn.modrinth.com', 'github.com', 'raw.githubusercontent.com', 'gitlab.com']);
-const ALLOWED_OVERRIDE_ROOTS = new Set(['config', 'defaultconfigs', 'kubejs', 'scripts', 'datapacks', 'global_packs', 'openloader']);
+const ALLOWED_OVERRIDE_ROOTS = new Set(['mods', 'config', 'defaultconfigs', 'kubejs', 'scripts', 'datapacks', 'global_packs', 'openloader']);
 const ALLOWED_MANIFEST_ROOTS = new Set(['mods', 'config', 'defaultconfigs', 'kubejs', 'scripts', 'datapacks', 'global_packs', 'openloader']);
+const CLIENT_ASSET_ROOTS = new Set(['shaderpacks', 'resourcepacks', 'screenshots']);
+const CLIENT_COSMETIC_FILES = new Set(['options.txt', 'icon.png', 'instance.png', 'pack.png', 'mmc-pack.json', 'minecraftinstance.json']);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -124,6 +126,28 @@ function allowedManifestDestination(relative: string) {
   return ALLOWED_MANIFEST_ROOTS.has(root);
 }
 
+function isClientAssetPath(relative: string) {
+  const normalized = relative.toLowerCase();
+  const root = normalized.split('/')[0];
+  return CLIENT_ASSET_ROOTS.has(root) || CLIENT_COSMETIC_FILES.has(normalized);
+}
+
+function overrideJarIsClientOnly(data: Buffer) {
+  try {
+    const nested = new AdmZip(data);
+    const fabric = nested.getEntry('fabric.mod.json');
+    if (fabric) {
+      const metadata = JSON.parse(fabric.getData().toString('utf8')) as { environment?: unknown };
+      return metadata.environment === 'client';
+    }
+    const forge = nested.getEntry('META-INF/mods.toml');
+    return Boolean(forge && /(?:^|\n)\s*clientSideOnly\s*=\s*true\s*(?:\n|$)/i.test(forge.getData().toString('utf8')));
+  } catch {
+    // The outer `.mrpack` checksum still protects the artifact; unsupported metadata is not treated as a client-only claim.
+    return false;
+  }
+}
+
 function readEnvironment(value: unknown): Environment | null {
   return value === 'required' || value === 'optional' || value === 'unsupported' ? value : null;
 }
@@ -149,6 +173,10 @@ function filePlans(manifest: MrpackManifest) {
       path = safeRelativePath(rawPath);
     } catch (error) {
       blockedReasons.push(error instanceof Error ? error.message : 'The manifest contains an unsafe file path.');
+      continue;
+    }
+    if (isClientAssetPath(path)) {
+      excludedClientFiles.push(path);
       continue;
     }
     if (!allowedManifestDestination(path)) {
@@ -201,6 +229,7 @@ function filePlans(manifest: MrpackManifest) {
 
 function inspectOverrides(zip: AdmZip) {
   const overrideFiles: OverridePlan[] = [];
+  const excludedClientFiles: string[] = [];
   const blockedReasons: string[] = [];
   for (const entry of zip.getEntries()) {
     if (entry.isDirectory) continue;
@@ -221,14 +250,26 @@ function inspectOverrides(zip: AdmZip) {
       blockedReasons.push(error instanceof Error ? error.message : 'The archive contains an unsafe override path.');
       continue;
     }
-    if (layer === 'client-overrides') continue;
+    if (layer === 'client-overrides') {
+      excludedClientFiles.push(name);
+      continue;
+    }
+    if (isClientAssetPath(destination)) {
+      excludedClientFiles.push(name);
+      continue;
+    }
+    const entryData = zip.getEntry(name)?.getData();
+    if (destination.startsWith('mods/') && destination.toLowerCase().endsWith('.jar') && entryData && overrideJarIsClientOnly(entryData)) {
+      excludedClientFiles.push(name);
+      continue;
+    }
     if (!allowedOverrideDestination(destination)) {
       blockedReasons.push(`The ${layer} entry ${destination} targets a protected or unsupported server path.`);
       continue;
     }
     overrideFiles.push({ source: name, destination, layer: layer === 'server-overrides' ? 'server-override' : 'common-override' });
   }
-  return { overrideFiles, blockedReasons };
+  return { overrideFiles, excludedClientFiles, blockedReasons };
 }
 
 export function inspectMrpack(archivePath: string, source: PackInspection['source']): PackInspection {
@@ -280,7 +321,7 @@ export function inspectMrpack(archivePath: string, source: PackInspection['sourc
     runtime,
     loaderVersion,
     requiredFiles: files.requiredFiles,
-    excludedClientFiles: files.excludedClientFiles,
+    excludedClientFiles: [...files.excludedClientFiles, ...overrides.excludedClientFiles],
     overrideFiles: overrides.overrideFiles,
     blockedReasons,
     source,
