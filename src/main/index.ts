@@ -1,14 +1,15 @@
 import { app, BrowserWindow, dialog, ipcMain } from 'electron';
-import { createWriteStream, existsSync } from 'node:fs';
+import { createReadStream, createWriteStream, existsSync } from 'node:fs';
 import { access, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { spawn, spawnSync, ChildProcess } from 'node:child_process';
 import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { unlink } from 'node:fs/promises';
 import os from 'node:os';
 import { checkForUpdates, downloadUpdate, getUpdateState, initializeUpdates, installDownloadedUpdate, releaseArtifactPolicy, saveUpdateSettings } from './updater';
+import { applyOverrides, downloadMrpackVersion, inspectMrpack, listModrinthPackVersions, removeTemporaryPack, searchModrinthPacks, type ModrinthPackVersion, type PackInspection, type PackFilePlan } from './pack-import';
 
 type ServerType = 'paper' | 'spigot' | 'forge' | 'fabric' | 'vanilla';
 type ServerStatus = 'offline' | 'starting' | 'online' | 'stopping' | 'failed';
@@ -43,6 +44,15 @@ interface BuildRequest {
   directory: string;
   memory: number;
   port: number;
+}
+
+interface ImportRequest {
+  name: string;
+  directory: string;
+  memory: number;
+  port: number;
+  archivePath: string;
+  source: PackInspection['source'];
 }
 
 const USER_AGENT = 'AetherPanel/0.1.0 (https://github.com/aetherpanel/aether-panel)';
@@ -103,6 +113,20 @@ function normalizeServerName(value: string) {
   return { display: trimmed, folder: safe };
 }
 
+function validateImportRequest(payload: unknown): ImportRequest {
+  const value = payload as Partial<ImportRequest>;
+  if (!value || typeof value !== 'object') throw new Error('Invalid pack import request.');
+  if (typeof value.directory !== 'string' || !value.directory.trim()) throw new Error('Choose a local installation directory.');
+  if (typeof value.archivePath !== 'string' || !value.archivePath.toLowerCase().endsWith('.mrpack')) throw new Error('Choose a valid Modrinth .mrpack archive.');
+  if (!value.source || (value.source.kind !== 'local' && value.source.kind !== 'modrinth')) throw new Error('The pack source is not valid.');
+  const memory = Number(value.memory);
+  const port = Number(value.port);
+  if (!Number.isInteger(memory) || memory < 1024 || memory > 65536) throw new Error('Memory must be between 1024 MB and 65536 MB.');
+  if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('Choose a valid port between 1024 and 65535.');
+  const { display } = normalizeServerName(String(value.name ?? ''));
+  return { name: display, directory: resolve(value.directory), memory, port, archivePath: resolve(value.archivePath), source: value.source };
+}
+
 function validateBuildRequest(payload: unknown): BuildRequest {
   const value = payload as Partial<BuildRequest>;
   if (!value || typeof value !== 'object') throw new Error('Invalid build request.');
@@ -148,6 +172,25 @@ async function ensureEulaAndProperties(serverDir: string, port: number) {
   }
 }
 
+async function enforceManagedPackProperties(serverDir: string, port: number, packName: string) {
+  await writeFile(join(serverDir, 'eula.txt'), 'eula=true\n', 'utf8');
+  const propertiesPath = join(serverDir, 'server.properties');
+  let existing = '';
+  try {
+    existing = await readFile(propertiesPath, 'utf8');
+  } catch {
+    // A package may omit server.properties; Aether will generate the controlled defaults.
+  }
+  const protectedKeys = new Set(['server-port', 'server-ip', 'online-mode', 'enable-rcon', 'rcon.port', 'rcon.password']);
+  const retained = existing.split(/\r?\n/).filter((line) => {
+    const key = line.split('=', 1)[0]?.trim();
+    return line.trim() && !protectedKeys.has(key);
+  });
+  retained.push(`server-port=${port}`, 'online-mode=true', 'enable-rcon=false');
+  if (!retained.some((line) => line.startsWith('motd='))) retained.push(`motd=${packName.replace(/[\r\n]/g, ' ')}`);
+  await writeFile(propertiesPath, `${retained.join('\n')}\n`, 'utf8');
+}
+
 function runCommand(command: string, args: string[], cwd: string, serverId: string, phase: 'install' | 'download' = 'install') {
   return new Promise<void>((resolvePromise, reject) => {
     const child = spawn(command, args, { cwd, windowsHide: true, shell: false });
@@ -183,11 +226,12 @@ async function buildPaper(version: string, serverDir: string, id: string) {
   return jar;
 }
 
-async function buildFabric(version: string, serverDir: string, id: string) {
+async function buildFabric(version: string, serverDir: string, id: string, pinnedLoaderVersion?: string) {
   buildEvent('download', `Resolving Fabric loader for Minecraft ${version}…`, id);
   const loaders = await fetchJson<Array<{ loader: { version: string; stable: boolean } }>>(`https://meta.fabricmc.net/v2/versions/loader/${encodeURIComponent(version)}`);
   const installers = await fetchJson<Array<{ version: string; stable: boolean }>>('https://meta.fabricmc.net/v2/versions/installer');
-  const loader = loaders.find((item) => item.loader.stable) ?? loaders[0];
+  const loader = pinnedLoaderVersion ? loaders.find((item) => item.loader.version === pinnedLoaderVersion) : (loaders.find((item) => item.loader.stable) ?? loaders[0]);
+  if (pinnedLoaderVersion && !loader) throw new Error(`Fabric loader ${pinnedLoaderVersion} is not available for Minecraft ${version}.`);
   const installer = installers.find((item) => item.stable) ?? installers[0];
   if (!loader || !installer) throw new Error(`Fabric does not currently publish a compatible loader for Minecraft ${version}.`);
   const jar = join(serverDir, 'server.jar');
@@ -197,14 +241,14 @@ async function buildFabric(version: string, serverDir: string, id: string) {
   return jar;
 }
 
-async function buildForge(version: string, serverDir: string, id: string) {
+async function buildForge(version: string, serverDir: string, id: string, pinnedLoaderVersion?: string) {
   buildEvent('download', `Resolving Forge installer for Minecraft ${version}…`, id);
   const response = await fetch('https://maven.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml', { headers: { 'User-Agent': USER_AGENT } });
   if (!response.ok) throw new Error('Unable to access the official Forge metadata.');
   const xml = await response.text();
   const versions = [...xml.matchAll(/<version>([^<]+)<\/version>/g)].map((match) => match[1]);
-  const forgeVersion = versions.filter((entry) => entry.startsWith(`${version}-`)).at(-1);
-  if (!forgeVersion) throw new Error(`Forge does not currently publish an installer for Minecraft ${version}.`);
+  const forgeVersion = pinnedLoaderVersion ? `${version}-${pinnedLoaderVersion}` : versions.filter((entry) => entry.startsWith(`${version}-`)).at(-1);
+  if (!forgeVersion || !versions.includes(forgeVersion)) throw new Error(pinnedLoaderVersion ? `Forge ${pinnedLoaderVersion} is not available for Minecraft ${version}.` : `Forge does not currently publish an installer for Minecraft ${version}.`);
   const installerPath = join(serverDir, 'forge-installer.jar');
   const installerUrl = `https://maven.minecraftforge.net/net/minecraftforge/forge/${encodeURIComponent(forgeVersion)}/forge-${encodeURIComponent(forgeVersion)}-installer.jar`;
   buildEvent('download', `Downloading Forge ${forgeVersion} installer…`, id);
@@ -228,6 +272,33 @@ async function buildSpigot(version: string, serverDir: string, id: string) {
   const match = files.find((file) => file === `spigot-${version}.jar`) ?? files.find((file) => /^spigot-.+\.jar$/i.test(file));
   if (!match) throw new Error('Spigot BuildTools completed but no Spigot JAR was found. Check the build output for prerequisites.');
   return join(serverDir, match);
+}
+
+async function hashFileSha512(path: string) {
+  return new Promise<string>((resolvePromise, reject) => {
+    const hash = createHash('sha512');
+    const stream = createReadStream(path);
+    stream.on('error', reject);
+    stream.on('data', (chunk) => hash.update(chunk));
+    stream.on('end', () => resolvePromise(hash.digest('hex')));
+  });
+}
+
+async function downloadVerifiedPackFile(file: PackFilePlan, destination: string, serverId: string) {
+  let lastError: Error | null = null;
+  for (const source of file.downloads) {
+    try {
+      await rm(destination, { force: true });
+      buildEvent('download', `Retrieving verified pack file ${file.filename}…`, serverId);
+      await downloadToFile(source, destination);
+      const actualHash = await hashFileSha512(destination);
+      if (actualHash !== file.sha512) throw new Error(`SHA-512 verification failed for ${file.filename}.`);
+      return;
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error('The pack file could not be downloaded.');
+    }
+  }
+  throw lastError ?? new Error(`The pack file ${file.filename} could not be downloaded from a verified source.`);
 }
 
 async function createServer(payload: unknown) {
@@ -271,6 +342,91 @@ async function createServer(payload: unknown) {
     buildEvent('error', error instanceof Error ? error.message : 'Server build failed.', id);
     throw error;
   }
+}
+
+async function createImportedServer(payload: unknown) {
+  const request = validateImportRequest(payload);
+  const inspection = inspectMrpack(request.archivePath, request.source);
+  if (inspection.readiness !== 'server-ready' || !inspection.runtime) {
+    throw new Error(`This package is not server-ready: ${inspection.blockedReasons.join(' ') || 'the declared runtime could not be verified.'}`);
+  }
+  const { folder } = normalizeServerName(request.name);
+  const serverDir = join(request.directory, folder);
+  const id = randomUUID();
+  if (existsSync(serverDir)) throw new Error(`The folder “${folder}” already exists in the selected directory.`);
+
+  buildEvent('queued', `Preflight passed for ${inspection.name}. Preparing a locked ${inspection.runtime.toUpperCase()} workspace…`, id);
+  await mkdir(serverDir, { recursive: true });
+  let jarPath = '';
+  try {
+    if (inspection.runtime === 'fabric') jarPath = await buildFabric(inspection.minecraft, serverDir, id, inspection.loaderVersion);
+    if (inspection.runtime === 'forge') jarPath = await buildForge(inspection.minecraft, serverDir, id, inspection.loaderVersion);
+
+    for (const file of inspection.requiredFiles) {
+      const destination = join(serverDir, ...file.path.split('/'));
+      await mkdir(dirname(destination), { recursive: true });
+      await downloadVerifiedPackFile(file, destination, id);
+    }
+
+    buildEvent('install', `Applying ${inspection.overrideFiles.length} declared configuration override${inspection.overrideFiles.length === 1 ? '' : 's'}…`, id);
+    await applyOverrides(inspection, serverDir);
+    await enforceManagedPackProperties(serverDir, request.port, inspection.name);
+
+    const installedContent = inspection.requiredFiles
+      .filter((file) => file.path.startsWith('mods/'))
+      .map((file, index) => ({ projectId: `pack:${inspection.versionId}:${index}`, title: file.filename, filename: file.filename, kind: 'mod' as const, installedAt: new Date().toISOString() }));
+    const lock = {
+      schema: 1,
+      createdAt: new Date().toISOString(),
+      source: inspection.source,
+      pack: { name: inspection.name, summary: inspection.summary, versionId: inspection.versionId },
+      runtime: { minecraft: inspection.minecraft, type: inspection.runtime, loaderVersion: inspection.loaderVersion },
+      files: { installed: inspection.requiredFiles, excludedClientOnly: inspection.excludedClientFiles },
+      overrides: inspection.overrideFiles,
+      protectedSettings: ['eula', 'server-port', 'server-ip', 'online-mode', 'rcon', 'aether-launch-command', 'aether-memory-ceiling'],
+      snapshot: 'pre-first-launch',
+    };
+    await writeFile(join(serverDir, 'aether-pack.lock.json'), JSON.stringify(lock, null, 2), 'utf8');
+
+    const server: ManagedServer = {
+      id,
+      name: request.name,
+      type: inspection.runtime,
+      version: inspection.minecraft,
+      directory: serverDir,
+      jarPath,
+      memory: request.memory,
+      port: request.port,
+      createdAt: new Date().toISOString(),
+      status: 'offline',
+      installedMods: installedContent.length,
+      installedContent,
+    };
+    const servers = await readServers();
+    servers.unshift(server);
+    await saveServers(servers);
+    buildEvent('complete', `${request.name} is ready from a verified Modrinth pack plan. Client-only files were excluded and a pre-first-launch lock was recorded.`, id);
+    return server;
+  } catch (error) {
+    await rm(serverDir, { recursive: true, force: true });
+    buildEvent('error', error instanceof Error ? error.message : 'The managed pack import failed.', id);
+    throw error;
+  } finally {
+    if (request.source.kind === 'modrinth') await removeTemporaryPack(request.archivePath);
+  }
+}
+
+async function inspectModrinthPackVersion(payload: unknown) {
+  const value = payload as { projectId?: string; version?: ModrinthPackVersion };
+  if (!value?.projectId || !value.version?.id || !value.version.fileUrl || !/^[a-f0-9]{128}$/i.test(value.version.sha512)) throw new Error('Choose a published Modrinth pack version before preflight.');
+  const cacheDirectory = join(app.getPath('temp'), 'aether-pack-previews');
+  const archivePath = await downloadMrpackVersion(value.projectId, value.version, cacheDirectory);
+  const archiveHash = await hashFileSha512(archivePath);
+  if (archiveHash !== value.version.sha512.toLowerCase()) {
+    await removeTemporaryPack(archivePath);
+    throw new Error('The downloaded Modrinth pack did not match its published SHA-512 hash.');
+  }
+  return inspectMrpack(archivePath, { kind: 'modrinth', projectId: value.projectId, versionId: value.version.id });
 }
 
 function emitServerOutput(serverId: string, line: string, kind: 'stdout' | 'stderr' | 'system') {
@@ -578,9 +734,18 @@ app.whenReady().then(async () => {
     const result = await dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'] });
     return result.canceled ? null : result.filePaths[0];
   });
+  ipcMain.handle('dialog:chooseMrpack', async () => {
+    const result = await dialog.showOpenDialog({ properties: ['openFile'], filters: [{ name: 'Modrinth pack', extensions: ['mrpack'] }] });
+    return result.canceled ? null : result.filePaths[0];
+  });
   ipcMain.handle('servers:list', () => readServers());
   ipcMain.handle('catalog:versions', () => getVersions());
   ipcMain.handle('builder:build', (_event, payload) => createServer(payload));
+  ipcMain.handle('builder:importPack', (_event, payload) => createImportedServer(payload));
+  ipcMain.handle('pack:inspectLocal', (_event, archivePath: string) => inspectMrpack(resolve(archivePath), { kind: 'local' }));
+  ipcMain.handle('pack:search', (_event, query: string) => searchModrinthPacks(query));
+  ipcMain.handle('pack:versions', (_event, projectId: string) => listModrinthPackVersions(projectId));
+  ipcMain.handle('pack:preflightModrinth', (_event, payload) => inspectModrinthPackVersion(payload));
   ipcMain.handle('server:start', (_event, id: string) => startServer(id));
   ipcMain.handle('server:stop', (_event, id: string) => stopServer(id));
   ipcMain.handle('server:command', (_event, payload) => sendCommand(payload));

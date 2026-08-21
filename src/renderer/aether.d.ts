@@ -28,6 +28,57 @@ export interface RuntimeStatus {
   git: { found: boolean; detail: string };
 }
 
+export interface PackFilePlan {
+  path: string;
+  filename: string;
+  sha512: string;
+  downloads: string[];
+  size: number;
+}
+
+export interface PackInspection {
+  readiness: 'server-ready' | 'unsupported';
+  archivePath: string;
+  name: string;
+  summary: string;
+  versionId: string;
+  minecraft: string;
+  runtime: 'fabric' | 'forge' | null;
+  loaderVersion: string;
+  requiredFiles: PackFilePlan[];
+  excludedClientFiles: string[];
+  overrideFiles: Array<{ source: string; destination: string; layer: 'common-override' | 'server-override' }>;
+  blockedReasons: string[];
+  source: { kind: 'local' | 'modrinth'; projectId?: string; versionId?: string };
+}
+
+export interface ModrinthPackHit {
+  projectId: string;
+  slug: string;
+  title: string;
+  description: string;
+  author: string;
+  iconUrl?: string;
+  downloads: number;
+  loaders: string[];
+  versions: string[];
+  environment: string[];
+}
+
+export interface ModrinthPackVersion {
+  id: string;
+  number: string;
+  name: string;
+  gameVersions: string[];
+  loaders: string[];
+  environment: string;
+  releasedAt: string;
+  fileName: string;
+  fileUrl: string;
+  sha512: string;
+  size: number;
+}
+
 export type UpdateChannel = 'stable' | 'preview';
 export type UpdatePhase = 'unconfigured' | 'ready' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'current' | 'error' | 'development' | 'unsupported';
 
@@ -86,6 +137,7 @@ declare global {
   interface Window {
     aether: {
       chooseDirectory: () => Promise<string | null>;
+      chooseMrpack: () => Promise<string | null>;
       getServers: () => Promise<ManagedServer[]>;
       getVersions: () => Promise<string[]>;
       buildServer: (payload: {
@@ -96,6 +148,11 @@ declare global {
         memory: number;
         port: number;
       }) => Promise<ManagedServer>;
+      importPackServer: (payload: { name: string; directory: string; memory: number; port: number; archivePath: string; source: PackInspection['source'] }) => Promise<ManagedServer>;
+      inspectLocalPack: (archivePath: string) => Promise<PackInspection>;
+      searchPacks: (query: string) => Promise<ModrinthPackHit[]>;
+      listPackVersions: (projectId: string) => Promise<ModrinthPackVersion[]>;
+      preflightModrinthPack: (payload: { projectId: string; version: ModrinthPackVersion }) => Promise<PackInspection>;
       startServer: (id: string) => Promise<void>;
       stopServer: (id: string) => Promise<void>;
       sendCommand: (id: string, command: string) => Promise<void>;

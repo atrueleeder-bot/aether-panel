@@ -37,7 +37,7 @@ import {
   X,
   Zap,
 } from 'lucide-react';
-import type { BuildEvent, ManagedServer, ModSearchHit, ReleasePolicy, ResourceSnapshot, RuntimeStatus, ServerOutputEvent, ServerType, UpdateChannel, UpdateState } from './aether';
+import type { BuildEvent, ManagedServer, ModSearchHit, ModrinthPackHit, ModrinthPackVersion, PackInspection, ReleasePolicy, ResourceSnapshot, RuntimeStatus, ServerOutputEvent, ServerType, UpdateChannel, UpdateState } from './aether';
 import './styles.css';
 
 type View = 'overview' | 'server' | 'build' | 'discover' | 'console' | 'updates';
@@ -52,9 +52,15 @@ const serverTypeMeta: Record<ServerType, { label: string; accent: string; descri
 
 const previewBridge: Window['aether'] = {
   chooseDirectory: async () => null,
+  chooseMrpack: async () => null,
   getServers: async () => [],
   getVersions: async () => ['1.21.4', '1.21.1', '1.20.6', '1.20.4', '1.19.4', '1.18.2'],
   buildServer: async () => { throw new Error('Server building is available only in the Windows desktop application.'); },
+  importPackServer: async () => { throw new Error('Pack imports are available only in the Windows desktop application.'); },
+  inspectLocalPack: async () => { throw new Error('Pack inspection is available only in the Windows desktop application.'); },
+  searchPacks: async () => [],
+  listPackVersions: async () => [],
+  preflightModrinthPack: async () => { throw new Error('Pack preflight is available only in the Windows desktop application.'); },
   startServer: async () => { throw new Error('Server control is available only in the Windows desktop application.'); },
   stopServer: async () => { throw new Error('Server control is available only in the Windows desktop application.'); },
   sendCommand: async () => { throw new Error('The local console is available only in the Windows desktop application.'); },
@@ -120,6 +126,15 @@ function App() {
   const [gitInstalling, setGitInstalling] = useState(false);
   const [gitInstallMessage, setGitInstallMessage] = useState('');
   const [form, setForm] = useState(defaultForm);
+  const [foundryMode, setFoundryMode] = useState<'runtime' | 'pack'>('runtime');
+  const [packQuery, setPackQuery] = useState('');
+  const [packResults, setPackResults] = useState<ModrinthPackHit[]>([]);
+  const [packSearchLoading, setPackSearchLoading] = useState(false);
+  const [selectedPack, setSelectedPack] = useState<ModrinthPackHit | null>(null);
+  const [packVersions, setPackVersions] = useState<ModrinthPackVersion[]>([]);
+  const [selectedPackVersion, setSelectedPackVersion] = useState<ModrinthPackVersion | null>(null);
+  const [packInspection, setPackInspection] = useState<PackInspection | null>(null);
+  const [packPreflighting, setPackPreflighting] = useState(false);
   const [building, setBuilding] = useState(false);
   const [buildLog, setBuildLog] = useState<BuildEvent[]>([]);
   const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
@@ -289,6 +304,95 @@ function App() {
   async function selectDirectory() {
     const directory = await window.aether.chooseDirectory();
     if (directory) setForm((current) => ({ ...current, directory }));
+  }
+
+  async function chooseLocalPack() {
+    const archivePath = await window.aether.chooseMrpack();
+    if (!archivePath) return;
+    setPackPreflighting(true);
+    setSelectedPack(null);
+    setPackVersions([]);
+    setSelectedPackVersion(null);
+    try {
+      const inspection = await window.aether.inspectLocalPack(archivePath);
+      setPackInspection(inspection);
+      setForm((current) => ({ ...current, name: `${inspection.name} Server` }));
+      pushNotice(inspection.readiness === 'server-ready' ? 'success' : 'error', inspection.readiness === 'server-ready' ? 'Local Modrinth pack preflight passed. Review the server plan.' : 'This local pack is not server-ready. Review the blocked requirements.');
+    } catch (error) {
+      setPackInspection(null);
+      pushNotice('error', error instanceof Error ? error.message : 'Unable to inspect the selected Modrinth pack.');
+    } finally {
+      setPackPreflighting(false);
+    }
+  }
+
+  async function searchPacks() {
+    setPackSearchLoading(true);
+    try {
+      setPackResults(await window.aether.searchPacks(packQuery));
+    } catch (error) {
+      pushNotice('error', error instanceof Error ? error.message : 'Modrinth pack discovery is unavailable.');
+    } finally {
+      setPackSearchLoading(false);
+    }
+  }
+
+  async function selectPack(pack: ModrinthPackHit) {
+    setSelectedPack(pack);
+    setSelectedPackVersion(null);
+    setPackInspection(null);
+    setPackPreflighting(true);
+    try {
+      const versions = await window.aether.listPackVersions(pack.projectId);
+      setPackVersions(versions);
+      if (!versions.length) pushNotice('error', 'This Modrinth project has no published .mrpack release with a SHA-512 hash.');
+    } catch (error) {
+      setPackVersions([]);
+      pushNotice('error', error instanceof Error ? error.message : 'Unable to load published pack versions.');
+    } finally {
+      setPackPreflighting(false);
+    }
+  }
+
+  async function preflightModrinthPack(version: ModrinthPackVersion) {
+    if (!selectedPack) return;
+    setSelectedPackVersion(version);
+    setPackPreflighting(true);
+    try {
+      const inspection = await window.aether.preflightModrinthPack({ projectId: selectedPack.projectId, version });
+      setPackInspection(inspection);
+      setForm((current) => ({ ...current, name: `${inspection.name} Server` }));
+      pushNotice(inspection.readiness === 'server-ready' ? 'success' : 'error', inspection.readiness === 'server-ready' ? 'Modrinth preflight passed. This pack can become a managed server.' : 'This Modrinth pack does not satisfy Aether’s strict server contract.');
+    } catch (error) {
+      setPackInspection(null);
+      pushNotice('error', error instanceof Error ? error.message : 'Unable to preflight the selected pack version.');
+    } finally {
+      setPackPreflighting(false);
+    }
+  }
+
+  async function buildPackServer() {
+    if (!form.directory) {
+      pushNotice('error', 'Choose a parent folder for the managed server before importing.');
+      return;
+    }
+    if (!packInspection || packInspection.readiness !== 'server-ready') {
+      pushNotice('error', 'Select a declared Modrinth pack that passes Aether’s server preflight first.');
+      return;
+    }
+    setBuilding(true);
+    setBuildLog([{ phase: 'queued', message: `Verified pack import created for ${packInspection.name}.` }]);
+    try {
+      const server = await window.aether.importPackServer({ name: form.name, directory: form.directory, memory: form.memory, port: form.port, archivePath: packInspection.archivePath, source: packInspection.source });
+      await refreshServers();
+      setSelectedServerId(server.id);
+      setView('server');
+      pushNotice('success', `${server.name} is ready from a verified server pack plan.`);
+    } catch (error) {
+      pushNotice('error', error instanceof Error ? error.message : 'The managed pack import did not complete.');
+    } finally {
+      setBuilding(false);
+    }
   }
 
   async function buildServer() {
@@ -512,24 +616,46 @@ function App() {
           <div className="section-intro"><p className="eyebrow"><span></span> SERVER FOUNDRY</p><h1>Build with intention.</h1><p>Choose a runtime, pin a Minecraft release, and keep every build inside a local workspace you control.</p></div>
           <div className="builder-layout">
             <div className="build-form glass-card">
-              <div className="form-section-title"><span>01</span><div><h3>Select runtime</h3><p>All downloads originate from documented official sources.</p></div></div>
-              <div className="runtime-select-grid">
-                {(Object.keys(serverTypeMeta) as ServerType[]).map((type) => {
-                  const meta = serverTypeMeta[type];
-                  return <button key={type} className={`runtime-choice ${form.type === type ? 'selected' : ''}`} style={{ '--runtime-accent': meta.accent } as React.CSSProperties} onClick={() => setForm((current) => ({ ...current, type }))}>
-                    <span className="runtime-dot"></span><strong>{meta.label}</strong><small>{meta.description}</small>{form.type === type && <Check size={16} className="choice-check" />}
-                  </button>;
-                })}
+              <div className="foundry-mode-switch" role="tablist" aria-label="Server creation mode">
+                <button className={foundryMode === 'runtime' ? 'selected' : ''} onClick={() => setFoundryMode('runtime')}><Box size={17}/><span>Build runtime</span><small>Choose a loader yourself</small></button>
+                <button className={foundryMode === 'pack' ? 'selected' : ''} onClick={() => setFoundryMode('pack')}><PackagePlus size={17}/><span>Pack Bay</span><small>Import a verified Modrinth pack</small></button>
               </div>
-              <div className="form-section-title top-gap"><span>02</span><div><h3>Shape the world</h3><p>These settings become a managed local server profile.</p></div></div>
-              <div className="form-grid">
-                <label className="field full"><span>World name</span><input value={form.name} maxLength={48} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} /></label>
-                <label className="field"><span>Minecraft release</span><select value={form.version} onChange={(event) => setForm((current) => ({ ...current, version: event.target.value }))}>{versions.map((version) => <option key={version}>{version}</option>)}</select></label>
-                <label className="field"><span>Memory ceiling</span><div className="suffix-input"><input type="number" min="1024" max="65536" step="512" value={form.memory} onChange={(event) => setForm((current) => ({ ...current, memory: Number(event.target.value) }))}/><span>MB</span></div></label>
-                <label className="field"><span>Game port</span><input type="number" min="1024" max="65535" value={form.port} onChange={(event) => setForm((current) => ({ ...current, port: Number(event.target.value) }))}/></label>
-                <label className="field full"><span>Workspace parent folder</span><div className="directory-input"><input value={form.directory} placeholder="Choose where this server will live" readOnly/><button type="button" onClick={selectDirectory}><FolderOpen size={17}/> Browse</button></div></label>
-              </div>
-              <div className="build-footer"><div className="build-note"><CircleAlert size={16}/><span>{form.type === 'spigot' ? 'Spigot compiles locally. First builds may take several minutes.' : form.type === 'forge' ? 'Forge runs its official installer locally after download.' : `A stable ${selectedMeta.label} build will be resolved at build time.`}</span></div><button className="primary-button" disabled={building} onClick={buildServer}>{building ? <LoaderCircle className="spin" size={18}/> : <Zap size={18}/>} {building ? 'Forging server…' : 'Build local server'}</button></div>
+
+              {foundryMode === 'runtime' ? <>
+                <div className="form-section-title"><span>01</span><div><h3>Select runtime</h3><p>All downloads originate from documented official sources.</p></div></div>
+                <div className="runtime-select-grid">
+                  {(Object.keys(serverTypeMeta) as ServerType[]).map((type) => {
+                    const meta = serverTypeMeta[type];
+                    return <button key={type} className={`runtime-choice ${form.type === type ? 'selected' : ''}`} style={{ '--runtime-accent': meta.accent } as React.CSSProperties} onClick={() => setForm((current) => ({ ...current, type }))}>
+                      <span className="runtime-dot"></span><strong>{meta.label}</strong><small>{meta.description}</small>{form.type === type && <Check size={16} className="choice-check" />}
+                    </button>;
+                  })}
+                </div>
+                <div className="form-section-title top-gap"><span>02</span><div><h3>Shape the world</h3><p>These settings become a managed local server profile.</p></div></div>
+                <div className="form-grid">
+                  <label className="field full"><span>World name</span><input value={form.name} maxLength={48} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} /></label>
+                  <label className="field"><span>Minecraft release</span><select value={form.version} onChange={(event) => setForm((current) => ({ ...current, version: event.target.value }))}>{versions.map((version) => <option key={version}>{version}</option>)}</select></label>
+                  <label className="field"><span>Memory ceiling</span><div className="suffix-input"><input type="number" min="1024" max="65536" step="512" value={form.memory} onChange={(event) => setForm((current) => ({ ...current, memory: Number(event.target.value) }))}/><span>MB</span></div></label>
+                  <label className="field"><span>Game port</span><input type="number" min="1024" max="65535" value={form.port} onChange={(event) => setForm((current) => ({ ...current, port: Number(event.target.value) }))}/></label>
+                  <label className="field full"><span>Workspace parent folder</span><div className="directory-input"><input value={form.directory} placeholder="Choose where this server will live" readOnly/><button type="button" onClick={selectDirectory}><FolderOpen size={17}/> Browse</button></div></label>
+                </div>
+                <div className="build-footer"><div className="build-note"><CircleAlert size={16}/><span>{form.type === 'spigot' ? 'Spigot compiles locally. First builds may take several minutes.' : form.type === 'forge' ? 'Forge runs its official installer locally after download.' : `A stable ${selectedMeta.label} build will be resolved at build time.`}</span></div><button className="primary-button" disabled={building} onClick={buildServer}>{building ? <LoaderCircle className="spin" size={18}/> : <Zap size={18}/>} {building ? 'Forging server…' : 'Build local server'}</button></div>
+              </> : <>
+                <div className="form-section-title"><span>01</span><div><h3>Select a declared pack</h3><p>Aether reads published metadata and will not guess a server runtime.</p></div></div>
+                <div className="pack-entry-actions"><button className="ghost-button" disabled={packPreflighting} onClick={chooseLocalPack}><FolderOpen size={17}/> Choose local .mrpack</button><form className="pack-search" onSubmit={(event) => { event.preventDefault(); void searchPacks(); }}><Search size={17}/><input value={packQuery} onChange={(event) => setPackQuery(event.target.value)} placeholder="Search published Modrinth packs"/><button disabled={packSearchLoading}>{packSearchLoading ? <LoaderCircle className="spin" size={16}/> : 'Search'}</button></form></div>
+                {packResults.length > 0 && <div className="pack-results">{packResults.map((pack) => <button key={pack.projectId} className={`pack-result ${selectedPack?.projectId === pack.projectId ? 'selected' : ''}`} onClick={() => void selectPack(pack)}><div className="pack-result-icon">{pack.iconUrl ? <img src={pack.iconUrl} alt=""/> : <PackagePlus size={20}/>}</div><div><strong>{pack.title}</strong><p>{pack.description || 'Published Modrinth modpack'}</p><small>by {pack.author || 'unknown'} · {formatNumber(pack.downloads)} downloads</small></div><ChevronRight size={16}/></button>)}</div>}
+                {selectedPack && <div className="pack-version-picker"><div><strong>{selectedPack.title}</strong><span>Choose a published `.mrpack` release before preflight.</span></div><select value={selectedPackVersion?.id ?? ''} disabled={packPreflighting || !packVersions.length} onChange={(event) => { const version = packVersions.find((item) => item.id === event.target.value); if (version) void preflightModrinthPack(version); }}><option value="">Select a release…</option>{packVersions.map((version) => <option value={version.id} key={version.id}>{version.number || version.name} · {version.gameVersions.join(', ')}</option>)}</select></div>}
+                {packInspection && <div className={`pack-preflight ${packInspection.readiness}`}><div className="pack-preflight-head"><div><p className="eyebrow"><span></span> PACK PREFLIGHT</p><h3>{packInspection.name}</h3><p>{packInspection.readiness === 'server-ready' ? 'Declared server plan verified.' : 'This package is not eligible for managed server construction.'}</p></div><span>{packInspection.readiness === 'server-ready' ? <ShieldCheck size={20}/> : <CircleAlert size={20}/>}</span></div>{packInspection.readiness === 'server-ready' ? <div className="pack-facts"><span><strong>{packInspection.runtime?.toUpperCase()}</strong> runtime</span><span><strong>{packInspection.minecraft}</strong> Minecraft</span><span><strong>{packInspection.requiredFiles.length}</strong> verified files</span><span><strong>{packInspection.excludedClientFiles.length}</strong> client-only excluded</span><span><strong>{packInspection.overrideFiles.length}</strong> safe overrides</span></div> : <div className="pack-blocked-list">{packInspection.blockedReasons.slice(0, 6).map((reason) => <p key={reason}><CircleAlert size={14}/>{reason}</p>)}</div>}</div>}
+                <div className="form-section-title top-gap"><span>02</span><div><h3>Register the managed world</h3><p>Aether creates a new workspace; the original pack archive remains untouched.</p></div></div>
+                <div className="form-grid">
+                  <label className="field full"><span>Managed world name</span><input value={form.name} maxLength={48} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} /></label>
+                  <label className="field"><span>Pack runtime</span><input value={packInspection ? `${packInspection.runtime?.toUpperCase() ?? '—'} · Minecraft ${packInspection.minecraft}` : 'Awaiting preflight'} readOnly/></label>
+                  <label className="field"><span>Memory ceiling</span><div className="suffix-input"><input type="number" min="1024" max="65536" step="512" value={form.memory} onChange={(event) => setForm((current) => ({ ...current, memory: Number(event.target.value) }))}/><span>MB</span></div></label>
+                  <label className="field"><span>Game port</span><input type="number" min="1024" max="65535" value={form.port} onChange={(event) => setForm((current) => ({ ...current, port: Number(event.target.value) }))}/></label>
+                  <label className="field full"><span>Workspace parent folder</span><div className="directory-input"><input value={form.directory} placeholder="Choose where this managed server will live" readOnly/><button type="button" onClick={selectDirectory}><FolderOpen size={17}/> Browse</button></div></label>
+                </div>
+                <div className="build-footer"><div className="build-note"><ShieldCheck size={16}/><span>Only declared server files, safe overrides, and hash-verified downloads enter the managed workspace.</span></div><button className="primary-button" disabled={building || packPreflighting || packInspection?.readiness !== 'server-ready'} onClick={buildPackServer}>{building ? <LoaderCircle className="spin" size={18}/> : <PackagePlus size={18}/>} {building ? 'Importing pack…' : 'Build managed server'}</button></div>
+              </>}
             </div>
             <aside className="build-telemetry glass-card">
               <div className="card-topline"><div><p className="eyebrow"><span></span> BUILD TELEMETRY</p><h3>Process stream</h3></div><TerminalSquare size={19}/></div>

@@ -2,9 +2,15 @@ import { contextBridge, ipcRenderer } from 'electron';
 
 contextBridge.exposeInMainWorld('aether', {
   chooseDirectory: () => ipcRenderer.invoke('dialog:chooseDirectory'),
+  chooseMrpack: () => ipcRenderer.invoke('dialog:chooseMrpack'),
   getServers: () => ipcRenderer.invoke('servers:list'),
   getVersions: () => ipcRenderer.invoke('catalog:versions'),
   buildServer: (payload: unknown) => ipcRenderer.invoke('builder:build', payload),
+  importPackServer: (payload: unknown) => ipcRenderer.invoke('builder:importPack', payload),
+  inspectLocalPack: (archivePath: string) => ipcRenderer.invoke('pack:inspectLocal', archivePath),
+  searchPacks: (query: string) => ipcRenderer.invoke('pack:search', query),
+  listPackVersions: (projectId: string) => ipcRenderer.invoke('pack:versions', projectId),
+  preflightModrinthPack: (payload: unknown) => ipcRenderer.invoke('pack:preflightModrinth', payload),
   startServer: (id: string) => ipcRenderer.invoke('server:start', id),
   stopServer: (id: string) => ipcRenderer.invoke('server:stop', id),
   sendCommand: (id: string, command: string) => ipcRenderer.invoke('server:command', { id, command }),

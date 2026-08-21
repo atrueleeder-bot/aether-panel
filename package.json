@@ -1,6 +1,6 @@
 {
   "name": "aether-panel",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "private": true,
   "description": "A standalone Windows Minecraft control panel with local server builders and compatible mod discovery.",
   "main": "dist/main/index.js",
@@ -40,7 +40,9 @@
       }
     ],
     "win": {
-      "target": ["nsis"],
+      "target": [
+        "nsis"
+      ],
       "artifactName": "Aether-Panel-${version}-${arch}.${ext}",
       "signAndEditExecutable": false
     },
@@ -55,6 +57,7 @@
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",
+    "adm-zip": "^0.6.0",
     "electron-updater": "^6.8.9",
     "lucide-react": "latest",
     "react": "latest",
@@ -62,6 +65,7 @@
     "vite": "latest"
   },
   "devDependencies": {
+    "@types/adm-zip": "^0.5.8",
     "@types/node": "latest",
     "@types/react": "latest",
     "@types/react-dom": "latest",
